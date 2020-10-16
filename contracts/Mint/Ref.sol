@@ -19,7 +19,7 @@ contract Ref {
         admin[a] = true;
     }
     function set_referrer(address r) onlyAdmin() external {
-        if (referrer[tx.origin] == address(0) {
+        if (referrer[tx.origin] == address(0)) {
             referrer[tx.origin] = r;
             emit ReferrerSet(tx.origin, r);
         }
