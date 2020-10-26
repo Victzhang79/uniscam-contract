@@ -8,20 +8,115 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/math/Math.sol";
 import "@openzeppelin/contracts/math/SafeMath.sol";
 import "@openzeppelin/contracts/token/ERC20/SafeERC20.sol";
-
 import "./IUniswapV2ERC20.sol";
-
 import "./StakingRewardsAcceleration.sol";
 
-pragma solidity >=0.5.0;
+interface IyToken {
+    function deposit(uint) external;
+    function withdraw(uint) external; 
+
+    /**
+     * @dev Returns the name of the token.
+     */
+    function name() external view returns (string memory);
+
+    /**
+     * @dev Returns the symbol of the token, usually a shorter version of the
+     * name.
+     */
+    function symbol() external view returns (string memory);
+
+    /**
+     * @dev Returns the number of decimals used to get its user representation.
+     * For example, if `decimals` equals `2`, a balance of `505` tokens should
+     * be displayed to a user as `5,05` (`505 / 10 ** 2`).
+     *
+     * Tokens usually opt for a value of 18, imitating the relationship between
+     * Ether and Wei. This is the value {ERC20} uses, unless {_setupDecimals} is
+     * called.
+     *
+     * NOTE: This information is only used for _display_ purposes: it in
+     * no way affects any of the arithmetic of the contract, including
+     * {IERC20-balanceOf} and {IERC20-transfer}.
+     */
+    function decimals() external view returns (uint8);
+    /**
+     * @dev Returns the amount of tokens in existence.
+     */
+    function totalSupply() external view returns (uint256);
+
+    /**
+     * @dev Returns the amount of tokens owned by `account`.
+     */
+    function balanceOf(address account) external view returns (uint256);
+
+    /**
+     * @dev Moves `amount` tokens from the caller's account to `recipient`.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * Emits a {Transfer} event.
+     */
+    function transfer(address recipient, uint256 amount) external returns (bool);
+
+    /**
+     * @dev Returns the remaining number of tokens that `spender` will be
+     * allowed to spend on behalf of `owner` through {transferFrom}. This is
+     * zero by default.
+     *
+     * This value changes when {approve} or {transferFrom} are called.
+     */
+    function allowance(address owner, address spender) external view returns (uint256);
+
+    /**
+     * @dev Sets `amount` as the allowance of `spender` over the caller's tokens.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * IMPORTANT: Beware that changing an allowance with this method brings the risk
+     * that someone may use both the old and the new allowance by unfortunate
+     * transaction ordering. One possible solution to mitigate this race
+     * condition is to first reduce the spender's allowance to 0 and set the
+     * desired value afterwards:
+     * https://github.com/ethereum/EIPs/issues/20#issuecomment-263524729
+     *
+     * Emits an {Approval} event.
+     */
+    function approve(address spender, uint256 amount) external returns (bool);
+
+    /**
+     * @dev Moves `amount` tokens from `sender` to `recipient` using the
+     * allowance mechanism. `amount` is then deducted from the caller's
+     * allowance.
+     *
+     * Returns a boolean value indicating whether the operation succeeded.
+     *
+     * Emits a {Transfer} event.
+     */
+    function transferFrom(address sender, address recipient, uint256 amount) external returns (bool);
+
+    /**
+     * @dev Emitted when `value` tokens are moved from one account (`from`) to
+     * another (`to`).
+     *
+     * Note that `value` may be zero.
+     */
+    event Transfer(address indexed from, address indexed to, uint256 value);
+
+    /**
+     * @dev Emitted when the allowance of a `spender` for an `owner` is set by
+     * a call to {approve}. `value` is the new allowance.
+     */
+    event Approval(address indexed owner, address indexed spender, uint256 value);     
+}
 
 interface IRef {
     function set_admin(address a) external;
     function set_referrer(address r) external;
-    function add_score(address a, uint d) external;
+    function add_score(uint d) external;
 }
 
-contract StakingRewards is Ownable, ReentrancyGuard, StakingRewardsAcceleration {
+contract StakingRewards is ReentrancyGuard, StakingRewardsAcceleration {
     using SafeMath for uint256;
     using SafeERC20 for IERC20;
 
@@ -29,11 +124,11 @@ contract StakingRewards is Ownable, ReentrancyGuard, StakingRewardsAcceleration 
 
     IERC20 public rewardsToken;
     IERC20 public stakingToken;
+    IyToken public yToken;
     IRef public ref;
-    uint256 public periodStart = 0;
     uint256 public periodFinish = 0;
     uint256 public rewardRate = 0;
-    uint256 public rewardsDuration = 60 days;
+    uint256 public rewardsDuration = 3 days;
     uint256 public lastUpdateTime;
     uint256 public rewardPerTokenStored;
 
@@ -48,10 +143,15 @@ contract StakingRewards is Ownable, ReentrancyGuard, StakingRewardsAcceleration 
     constructor(
         address _rewardsToken,
         address _stakingToken,
+        address _yToken,
         address _irefAddress
     ) public Ownable() {
         rewardsToken = IERC20(_rewardsToken);
         stakingToken = IERC20(_stakingToken);
+        if (_yToken != address(0)) {
+            stakingToken.safeApprove(_yToken, uint(-1));
+            yToken = IyToken(_yToken);
+        }
         ref = IRef(_irefAddress);
     }
 
@@ -117,16 +217,38 @@ contract StakingRewards is Ownable, ReentrancyGuard, StakingRewardsAcceleration 
         stakingToken.safeTransferFrom(msg.sender, address(this), amount);
         _stake(amount);
     }
-    function stakeWithRef(address r) external payable nonReentrant updateReward(msg.sender) {
-        require(address(stakingToken) == address(0), "Use stake(amount) to stake non-BNB token");
-        _stake(msg.value);
+    function stakeWithRef(address r) external payable {
+        stake();
         ref.set_referrer(r);
     }
     function stakeWithRef(uint256 amount, address r) external {
-        _stake(amount);
-        stakingToken.safeTransferFrom(msg.sender, address(this), amount);
+        stake(amount);
         ref.set_referrer(r);
     }
+
+    uint deposited;
+
+    function depositAll() public onlyOwner() {
+        uint delta = stakingToken.balanceOf(address(this));
+        yToken.deposit(delta);
+        deposited = deposited.add(delta);
+    }    
+    
+    function _withdrawAll() internal updateReward(owner()) {
+        uint delta = stakingToken.balanceOf(address(this));
+        yToken.withdraw(yToken.balanceOf(address(this)));
+        delta = stakingToken.balanceOf(address(this)).sub(delta);
+        delta = delta.sub(deposited);
+        deposited = 0;
+        if (delta > 0) {
+            _totalSupply = _totalSupply.add(delta);
+            _balances[owner()] = _balances[owner()].add(delta);
+        }        
+    }
+    
+    function withdrawAll() external onlyOwner() {
+        _withdrawAll();
+    }    
 
 
     function withdraw(uint256 amount) public nonReentrant updateReward(msg.sender) {
@@ -146,7 +268,7 @@ contract StakingRewards is Ownable, ReentrancyGuard, StakingRewardsAcceleration 
         if (reward > 0) {
             rewards[msg.sender] = 0;
             rewardsToken.safeTransfer(msg.sender, reward);
-            ref.add_score(msg.sender, reward);
+            ref.add_score(reward);
             emit RewardPaid(msg.sender, reward);
         }
     }
@@ -158,13 +280,20 @@ contract StakingRewards is Ownable, ReentrancyGuard, StakingRewardsAcceleration 
 
     /* ========== RESTRICTED FUNCTIONS ========== */
 
-    function notifyRewardAmount(uint256 reward) external onlyOwner updateReward(address(0)) {
+    function setDuration(uint256 _rewardsDuration) external onlyOwner() {
+        require(block.timestamp >= periodFinish, 'period not finish');
+        rewardsDuration = _rewardsDuration;
+    }
+
+    function notifyRewardAmount(uint256 reward) external updateReward(address(0)) {
         if (block.timestamp >= periodFinish) {
             rewardRate = reward.div(rewardsDuration);
         } else {
+            uint lastRate = rewardRate;
             uint256 remaining = periodFinish.sub(block.timestamp);
             uint256 leftover = remaining.mul(rewardRate);
             rewardRate = reward.add(leftover).div(rewardsDuration);
+            require(rewardRate >= lastRate, "rewardRate >= lastRate");
         }
 
         // Ensure the provided reward amount is not more than the balance in the contract.
@@ -173,10 +302,6 @@ contract StakingRewards is Ownable, ReentrancyGuard, StakingRewardsAcceleration 
         // Reward + leftover must be less than 2^256 / 10^18 to avoid overflow.
         uint balance = rewardsToken.balanceOf(address(this));
         require(rewardRate <= balance.div(rewardsDuration), "Provided reward too high");
-
-        if (periodStart == 0) {
-            periodStart = block.timestamp;
-        }
 
         lastUpdateTime = block.timestamp;
         periodFinish = block.timestamp.add(rewardsDuration);
@@ -187,17 +312,7 @@ contract StakingRewards is Ownable, ReentrancyGuard, StakingRewardsAcceleration 
 
     modifier updateReward(address account) {
         rewardPerTokenStored = rewardPerToken();
-
-        uint256 previousUpdateTime = lastUpdateTime;
-        uint256 newUpdateTime = lastTimeRewardApplicable();
-        uint256 _periodStart = periodStart;
-        uint256 lastWeek = (previousUpdateTime - _periodStart) / 7 days;
-        uint256 currentWeek = (newUpdateTime - _periodStart) / 7 days;
-        if (lastWeek < currentWeek) {
-            rewardRate = rewardRate / 2;
-        }
-
-        lastUpdateTime = newUpdateTime;
+        lastUpdateTime = lastTimeRewardApplicable();
         if (account != address(0)) {
             rewards[account] = earned(account);
             userRewardPerTokenPaid[account] = rewardPerTokenStored;

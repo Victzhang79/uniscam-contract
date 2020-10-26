@@ -8,12 +8,15 @@ contract Ref {
     mapping(address => bool) public admin;
 
     modifier onlyAdmin() {
-        require(admin[msg.sender], "You 're not admin");
+        require(admin[msg.sender], "You're not admin");
         _;
     }
 
-    constructor() public  {
+    constructor() public {
         admin[msg.sender] = true;        
+    }
+    function scoreOf(address a) public view returns (uint) {
+        return score[a];
     }
     function set_admin(address a) onlyAdmin() external {
         admin[a] = true;
