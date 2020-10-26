@@ -2,13 +2,14 @@
 
 pragma solidity ^0.6;
 
+import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 import "@openzeppelin/contracts/token/ERC1155/IERC1155.sol";
 import "@openzeppelin/contracts/token/ERC1155/ERC1155Receiver.sol";
 
 import "./StakingRewardsAcceleration.sol";
 
-contract StakingRewardsAccelerator is ReentrancyGuard, ERC1155Receiver {
+contract StakingRewardsAccelerator is Ownable, ReentrancyGuard, ERC1155Receiver {
     IERC1155 public stakingToken;
     IStakingRewardsAcceleration public rewardsAcceleration;
 
@@ -21,10 +22,10 @@ contract StakingRewardsAccelerator is ReentrancyGuard, ERC1155Receiver {
     ) public {
         stakingToken = IERC1155(_stakingToken);
         rewardsAcceleration = IStakingRewardsAcceleration(_rewardsAcceleration);
+    }
 
-        qualityMap[1] = 500;
-        qualityMap[2] = 1500;
-        qualityMap[3] = 3000;
+    function setQualityToToken(uint256 tokenId, uint16 quality) public external onlyOwner() returns(uint256 tokenId) {
+        qualityMap[tokenId] = quality;
     }
 
     function getStaked(address account) external view returns (uint256) {
